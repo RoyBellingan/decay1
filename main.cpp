@@ -226,7 +226,7 @@ int main() {
 		auto delta1 = old1 - nuclides[0];
 		int delta2 = ((int)nuclides[1] - old2) - delta1;
 
-		printf("%u,-%u,%u,%i,%li . %.2e\n",nuclides[0], delta1, nuclides[1],delta2,res3.tv_sec,v0);
+		printf("%u, %u,-%u,%u,%i,%li . %.2e\n",zz, nuclides[0], delta1, nuclides[1],delta2,res3.tv_sec,v0);
 
 		//uint32_t iteration[4]{368997473 / global_size,368997473 % global_size,0,0};
 

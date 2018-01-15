@@ -9,7 +9,7 @@
 
 //https://stackoverflow.com/a/16130111
 float rand(uint *state, int g1){
-/*/
+//*/
 	uint x = state[0];
 	x ^= x << 13;
 	x ^= x >> 17;
