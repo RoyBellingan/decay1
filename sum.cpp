@@ -16,7 +16,7 @@ float rand(uint *state, int g1){
 	x ^= x << 5;
 	state[0] = x;
 	float t1 = x;
-	static float max = 4294967295;
+	float max = 4294967295;
 	//return t1;
 	return t1 / max;
 /*/
@@ -33,7 +33,7 @@ float rand(uint *state, int g1){
 	t + (state[4] += 362437);
 
 	float t1 = t;
-	static float max = 4294967295;
+	float max = 4294967295;
 	//return t1;
 	return t1 / max;
 //*/
@@ -73,8 +73,8 @@ state[4] =  5567898 + 0xFF4 * g1 + local_addr;
 
 
 //printf("%u \n", state[0]);
-if(max > 1000000){
-	printf("Too many iteration !\n");
+if(max > 100000000){
+	//printf("Too many iteration !\n");
 	return;
 }
 float pro = prob->x;
