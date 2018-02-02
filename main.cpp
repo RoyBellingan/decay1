@@ -136,8 +136,8 @@ int main() {
 
 	/* Data and buffers */
 	//128 * 20 is 2560 but is better to oversplip
-	global_size = (128 * 20) * 8;
-	local_size = 128;
+	global_size = 24 * 192;
+	local_size = 24;
 
 	//allocate buffer
 	cl_mem iterBuffer,nuclideBuffer, probBuffer, seedBuffer;
@@ -151,20 +151,23 @@ int main() {
 	}
 
 	//first is integer division, second is modulo
-	uint64_t totRadium = 61499579;
+	uint64_t totRadium = 368997473;
 	uint32_t iteration[4]{totRadium / (global_size - 1),totRadium % global_size,0,0};
-	uint32_t nuclides[2]{totRadium,0};
+	//slightly bigger
+	uint32_t nuclides[8]{totRadium,0,0,0,0,0,0,0};
 	uint32_t seed = 0;
 
-	float prob[2]{1.187e-7f,0.0182f};
+	float prob[2]{1.187e-7f * 10,0.0182f * 10};
 	/* Build program */
 	program = build_program(context, device, PROGRAM_FILE);
 
 	/* Create data buffer */
 	iterBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY |
 				    CL_MEM_USE_HOST_PTR, 4 * sizeof(uint32_t), iteration, &err);
+	//this is sligtly larger to accomodate a scratch are to circumvent a bug in Intel card that disable atomic function
+	//for var declare IN the kernel
 	nuclideBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE |
-				       CL_MEM_COPY_HOST_PTR, 2 * sizeof(uint32_t), nuclides, &err);
+				       CL_MEM_COPY_HOST_PTR, 8 * sizeof(uint32_t), nuclides, &err);
 	probBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY |
 				    CL_MEM_COPY_HOST_PTR, 2 * sizeof(float), prob, &err);
 	seedBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY |
@@ -221,7 +224,7 @@ int main() {
 
 		/* Read the kernel's output */
 		err = clEnqueueReadBuffer(queue, nuclideBuffer, CL_TRUE, 0,
-					  2 * sizeof(uint32_t) , nuclides, 0, NULL, NULL);
+					  8 * sizeof(uint32_t) , nuclides, 0, NULL, NULL);
 
 		//yes I should use signed... (that is to avoid negative value)
 		if(nuclides[1] > 0xFF000000){
@@ -251,6 +254,7 @@ int main() {
 		err = clEnqueueWriteBuffer(queue, iterBuffer, CL_TRUE, 0, 4* sizeof(uint32_t) , iteration, 0, NULL, NULL);
 		err = clEnqueueWriteBuffer(queue, seedBuffer, CL_TRUE, 0,sizeof(uint32_t) , &zz, 0, NULL, NULL);
 
+		//exit(1);
 	}
 
 

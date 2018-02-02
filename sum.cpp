@@ -21,7 +21,7 @@ float rand(uint *state, int g1){
 	t ^= s;
 	t ^= s << 4;
 	state[0] = t;
-	t + (state[4] += 362437);
+	//t + (state[4] += 362437); ???
 
 	float t1 = t;
 	float max = 4294967295;
@@ -59,25 +59,70 @@ __kernel void add_numbers(__global uint* iteration,__global uint* nuclide , __gl
 
 	//Radium LOOP
 	for(ulong j = 0;
-	    j < max;
+	    j <= max;
 	    j++){
 		float v = rand(&state,g1);
 		if(v  < prob->x){// compare r with probability density function, here p = const.: is there a decay?
 			atom_dec(nuclide);
-			atom_inc(nuclide + 1);
+			//BONUS! check if we decay immediately ^_^ no fence, no memory reordering no nothing!!!
+			v = rand(&state,g1);
+			if(v < prob->y){ //compare r with probability density function, here p = const.: is there a decay?
+				//atom_dec(nuclide + 1);
+				//DO NOT DO NOTHING AHAHHA!
+			}else{
+				//ok we gained one
+				atom_inc(nuclide + 1);
+			}
+
 		}
 	}
 
-	max = iteration[2];
-	if(g1 == 0){//first kernel run the remnant
-		max = iteration[3];
+	barrier(CLK_GLOBAL_MEM_FENCE);
+
+	if(g1 == (24 * 192) - 1){//LAST kernel run the remnant and do the swap!
+		atomic_xchg((nuclide + 2),*(nuclide + 1));
+		max = atomic_max((nuclide + 2),0) % ((24 * 192) - 1);
+		//printf("k: %u - iter %u swapped %u  old %u\n",g1, max, atomic_max((nuclide + 2),0), *(nuclide + 1));
 	}
-	//Radon LOOP
+	//all the thread will wait here that the last perform the swap and than restart
+	barrier(CLK_GLOBAL_MEM_FENCE);
+
+	if(g1 != (24 * 192) - 1){//LAST kernel run the remnant and do the swap!
+		max = atomic_max((nuclide + 2),0) / ((24 * 192) - 1);
+	}
+
+	//printf("k: %u - iter %u swapped %u  old %u\n",g1, max, atomic_max((nuclide + 2),0), *(nuclide + 1));
+	if(g1 == 1){//avoid spamming
+		//printf("k: %u - iter %u swapped %u  old %u\n",g1, max, atomic_max((nuclide + 2),0), *(nuclide + 1));
+	}
+//		atomic_xchg(nuclide + 4,0);
+//		atomic_xchg(nuclide + 3,0);
+//atomic_xchg(nuclide + 5,0);
+//atomic_xchg(nuclide + 6,0);
+	barrier(CLK_GLOBAL_MEM_FENCE);
+
+
+
+	//Surviving Radon LOOP
 	for(ulong j = 0;
 	    j < max;
 	    j++) {
-		if(rand(&state,g1)  < prob->y){ //compare r with probability density function, here p = const.: is there a decay?
+//		atomic_inc(nuclide + 4);
+//		atomic_inc(nuclide + 3);
+//		atomic_inc(nuclide + 5);
+//		atomic_inc(nuclide + 6);
+
+		float v = rand(&state,g1);
+		if(v < prob->y){ //compare r with probability density function, here p = const.: is there a decay?
 			atom_dec(nuclide + 1);
+		}else{
+//			printf("not boom %f? \n", v);
 		}
 	}
+
+//	barrier(CLK_GLOBAL_MEM_FENCE);
+//	printf("total run: %u \n", atomic_max((nuclide + 4),0));
+//	printf("total run: %u \n", atomic_max((nuclide + 3),0));
+//	printf("total run: %u \n", atomic_max((nuclide + 5),0));
+//	printf("total run: %u \n", atomic_max((nuclide + 6),0));
 }
