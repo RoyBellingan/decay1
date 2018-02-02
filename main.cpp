@@ -14,7 +14,9 @@
 #include <CL/cl.h>
 #endif
 
-
+/**
+ * @brief timespec_diff is just a quick function to subtract two timespec
+ */
 void timespec_diff(struct timespec *start, struct timespec *stop,
 		   struct timespec *result) {
 	if ((stop->tv_nsec - start->tv_nsec) < 0) {
@@ -31,53 +33,6 @@ void timespec_diff(struct timespec *start, struct timespec *stop,
 
 /* Find a GPU or CPU associated with the first available platform */
 cl_device_id create_device() {
-/*
-{
-	int i, j;
-	char* info;
-	size_t infoSize;
-	cl_uint platformCount;
-	cl_platform_id *platforms;
-	const char* attributeNames[5] = { "Name", "Vendor",
-	    "Version", "Profile", "Extensions" };
-	const cl_platform_info attributeTypes[5] = { CL_PLATFORM_NAME, CL_PLATFORM_VENDOR,
-	    CL_PLATFORM_VERSION, CL_PLATFORM_PROFILE, CL_PLATFORM_EXTENSIONS };
-	const int attributeCount = sizeof(attributeNames) / sizeof(char*);
-
-	// get platform count
-	clGetPlatformIDs(NULL, NULL, &platformCount);
-
-	// get all platforms
-	platforms = (cl_platform_id*) malloc(sizeof(cl_platform_id) * platformCount);
-	clGetPlatformIDs(platformCount, platforms, NULL);
-
-	// for each platform print all attributes
-	for (i = 0; i < platformCount; i++) {
-
-	    printf("\n %d. Platform \n", i+1);
-
-	    for (j = 0; j < attributeCount; j++) {
-
-		// get platform attribute value size
-		clGetPlatformInfo(platforms[i], attributeTypes[j], 0, NULL, &infoSize);
-		info = (char*) malloc(infoSize);
-
-		// get platform attribute value
-		clGetPlatformInfo(platforms[i], attributeTypes[j], infoSize, info, NULL);
-
-		printf("  %d.%d %-11s: %s\n", i+1, j+1, attributeNames[j], info);
-		free(info);
-
-	    }
-
-	    printf("\n");
-
-	}
-
-    free(platforms);
-
-}
-*/
 	cl_uint platformCount;
 	cl_platform_id *platforms;
 	cl_uint deviceCount;
@@ -111,16 +66,6 @@ cl_device_id create_device() {
 		    clGetDeviceInfo(devices[0], CL_DEVICE_NAME, valueSize, value, NULL);
 		    printf("Device: %s\n", value);
 	free(value);
-
-	/* Access a device */
-//	err = clGetDeviceIDs(platforms[2], CL_DEVICE_TYPE_GPU,1, &dev, NULL);
-//	if(err == CL_DEVICE_NOT_FOUND) {
-//		err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_CPU, 1, &dev, NULL);
-//	}
-//	if(err < 0) {
-//		perror("Couldn't access any devices");
-//		exit(1);
-//	}
 
 	return devices[0];
 }
