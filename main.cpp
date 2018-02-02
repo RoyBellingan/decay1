@@ -135,8 +135,10 @@ int main() {
 	size_t local_size, global_size;
 
 	/* Data and buffers */
-	global_size = (128 * 7) * 8;
+	//128 * 20 is 2560 but is better to oversplip
+	global_size = (128 * 20) * 8;
 	local_size = 128;
+
 
 	//cl_int num_groups = global_size/local_size;
 	cl_mem iterBuffer,nuclideBuffer, probBuffer, seedBuffer;
@@ -150,10 +152,10 @@ int main() {
 		exit(1);
 	}
 
-	//uint32_t *pbuf = (uint32_t *)aligned_alloc(4096, 64);
 	//first is integer division, second is modulo
-	uint32_t iteration[4]{368997473 / (global_size - 1),368997473 % global_size,0,0};
-	uint32_t nuclides[2]{368997473,0};
+	uint64_t totRadium = 61499579;
+	uint32_t iteration[4]{totRadium / (global_size - 1),totRadium % global_size,0,0};
+	uint32_t nuclides[2]{totRadium,0};
 	uint32_t seed = 0;
 
 	float prob[2]{1.187e-7f,0.0182f};
