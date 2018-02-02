@@ -1,15 +1,6 @@
-//kernel void hello(global ulong *val) {
-//		size_t i = get_global_id(0);
-//		for (ulong j = 0; j < 100000000; j++) {
-//				val[i] += j;
-//		}
-//}
-
-
-
 //https://stackoverflow.com/a/16130111
 float rand(uint *state, int g1){
-//*/
+/*/
 	uint x = state[0];
 	x ^= x << 13;
 	x ^= x >> 17;
