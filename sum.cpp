@@ -1,18 +1,51 @@
-//https://stackoverflow.com/a/16130111
-float rand(uint *state, int g1){
-	/*/
-    uint x = state[0];
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    state[0] = x;
-    float t1 = x;
-    float max = 4294967295;
-    //return t1;
-    return t1 / max;
-/*/
-	// Algorithm "xorwow" from p. 5 of Marsaglia, "Xorshift RNGs"
-	uint s, t = state[3];
+// Ra-226 -> Rn-222 decay, Monte Carlo: every atom is tested once per time step.
+//
+// nuclide[0] = Radium, nuclide[1] = Radon        live counters, changed with atomics
+// nuclide[2], nuclide[3] = snapshots of [0], [1] copied by the host queue
+//                          (clEnqueueCopyBuffer) right before each kernel,
+//                          so every work-item splits the same population.
+//
+// One time step = radium_decay, then radon_decay. The queue is in-order, so the
+// second kernel starts only after the first has finished.
+//
+// LANES (build option -DLANES=N, N = 1, 2, 4, 8, 16): every work-item runs N
+// independent random streams side by side in a uintN vector. The random number
+// generator is a recurrence, so one stream can't be vectorised; N streams can:
+// on a CPU (pocl) each operation becomes one AVX2 instruction for 8 lanes.
+
+#ifndef LANES
+#define LANES 8
+#endif
+
+#define CAT_(a, b) a##b
+#define CAT(a, b) CAT_(a, b)
+
+#if LANES == 1
+typedef uint vuint;
+#define LANE_IDS ((vuint)(0))
+// scalar comparisons give 1 for true
+#define COUNT_IF(cnt, cond) ((cnt) += (uint)(cond))
+#else
+typedef CAT(uint, LANES) vuint;
+#if LANES == 2
+#define LANE_IDS ((vuint)(0, 1))
+#elif LANES == 4
+#define LANE_IDS ((vuint)(0, 1, 2, 3))
+#elif LANES == 8
+#define LANE_IDS ((vuint)(0, 1, 2, 3, 4, 5, 6, 7))
+#elif LANES == 16
+#define LANE_IDS ((vuint)(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15))
+#else
+#error "LANES must be 1, 2, 4, 8 or 16"
+#endif
+// vector comparisons give -1 (all bits set) for true: subtracting it adds 1
+#define COUNT_IF(cnt, cond) ((cnt) -= CAT(as_uint, LANES)(cond))
+#endif
+
+// Algorithm "xorwow" from p. 5 of Marsaglia, "Xorshift RNGs" (without the Weyl
+// counter, as before), one step in every lane.
+inline vuint xorwow(vuint *state) {
+	vuint s, t = state[3];
 	t ^= t >> 2;
 	t ^= t << 1;
 	state[3] = state[2];
@@ -21,79 +54,110 @@ float rand(uint *state, int g1){
 	t ^= s;
 	t ^= s << 4;
 	state[0] = t;
-	//t + (state[4] += 362437); ???
-
-	float t1 = t;
-	float max = 4294967295;
-	//return t1;
-	return t1 / max;
-	//*/
+	return t;
 }
 
-//The event are rare, so we just go for atomic instead of having a local buffer and performing operation at the end
-//https://groups.google.com/forum/#!topic/boost-compute/xJS05dkQEJk
-//https://stackoverflow.com/q/11364567
-__kernel void add_numbers(__global uint* iteration,__global uint* nuclide , __global float2* prob, __global uint* seed ) {
+// lowbias32 integer hash (Chris Wellons): decorrelates neighbouring streams.
+inline vuint hash32(vuint x) {
+	x ^= x >> 16;
+	x *= 0x7feb352dU;
+	x ^= x >> 15;
+	x *= 0x846ca68bU;
+	x ^= x >> 16;
+	return x;
+}
 
-	//usual declaration of variable
-	float4 input1, input2, sum_vector;
-	uint global_addr, local_addr;
-
-	local_addr = get_local_id(0);
-	int g1 = get_global_id(0);
-
-	//Each GPU Thread will need a local state for the random generator
-	uint state[5];
-	state[0] = g1 + (local_addr + 1 + ( (local_addr * 0xFFCC) << 4)) + ((*seed << 23) * *seed << 3);
-	state[1] = state[0] ^ ((*seed << 23) | (*seed << 3));
-	state[2] = g1 + g1 ^ (g1 | 5567898) + 0xFF4 + iteration[1];
-	state[3] =  5567898 + 0xFF4 * g1 + iteration[0];
-	state[4] =  5567898 + 0xFF4 * g1 + local_addr;
-
-
-	//first thread will compute the remainder
-	ulong max = iteration[0];
-	if(g1 == 0){//first kernel run the remnant
-		max = iteration[1];
+// Each lane of each work-item gets its own stream, keyed by (stream id, step, kernel).
+// Hash the stream id BEFORE combining it with the step: with plain
+// `stream ^ hash(step)`, two steps whose hashes share their high bits only
+// permute the same set of seeds, and replay the same random numbers.
+inline void seed_state(vuint *state, uint seed, uint salt) {
+	vuint stream = (vuint)((uint)get_global_id(0) * LANES) + LANE_IDS;
+	vuint h = hash32(hash32(stream) ^ hash32((vuint)(seed ^ salt)));
+	for (int i = 0; i < 4; i++) {
+		h = hash32(h + 0x9e3779b9U);
+		state[i] = h;
 	}
+	state[0] |= 1; // xorwow state must not be all zero
+}
 
-	//Radium LOOP
-	for(ulong j = 0;
-	    j <= max;
-	    j++){
-		float v = rand(&state,g1);
-		if(v  < prob->x){// compare r with probability density function, here p = const.: is there a decay?
-			atom_dec(nuclide);
-			atom_inc(nuclide + 1);
-		}
+// Exact split of `total` atoms over the work-items: the first total % n get one extra.
+inline uint my_share(uint total) {
+	uint n = get_global_size(0), g = get_global_id(0);
+	return total / n + (g < total % n ? 1u : 0u);
+}
+
+// Count decays among `atoms`, with probability threshold / 2^32 each:
+// comparing the raw integer against a precomputed threshold needs no float
+// conversion and no division. The atoms are dealt over the lanes; the last
+// partial round is masked to the first `atoms % LANES` lanes.
+inline uint count_decays(uint atoms, uint threshold, vuint *state) {
+	vuint cnt = (vuint)(0);
+	uint rounds = atoms / LANES, rest = atoms % LANES;
+	for (uint j = 0; j < rounds; j++)
+		COUNT_IF(cnt, xorwow(state) < threshold);
+	if (rest)
+		COUNT_IF(cnt, (xorwow(state) < threshold) & (LANE_IDS < rest));
+
+	// Horizontal sum by halving with swizzles. Never take the vector's address
+	// (e.g. ((uint *)&cnt)[i]): on a GPU that moves it to slow scratch memory.
+#if LANES == 1
+	return cnt;
+#else
+#if LANES == 16
+	uint8 c8 = cnt.lo + cnt.hi;
+#elif LANES == 8
+	uint8 c8 = cnt;
+#endif
+#if LANES >= 8
+	uint4 c4 = c8.lo + c8.hi;
+#elif LANES == 4
+	uint4 c4 = cnt;
+#endif
+#if LANES >= 4
+	uint2 c2 = c4.lo + c4.hi;
+#else
+	uint2 c2 = cnt;
+#endif
+	return c2.x + c2.y;
+#endif
+}
+
+// Sum of `v` over the work-group, via one local atomic per work-item.
+// Result is meaningful in work-item 0.
+inline uint group_sum(uint v, __local uint *acc) {
+	if (get_local_id(0) == 0)
+		*acc = 0;
+	barrier(CLK_LOCAL_MEM_FENCE);
+	if (v)
+		atomic_add(acc, v);
+	barrier(CLK_LOCAL_MEM_FENCE);
+	return *acc;
+}
+
+__kernel void radium_decay(__global uint *nuclide, const uint threshold, const uint seed) {
+	__local uint acc;
+	vuint state[4];
+	seed_state(state, seed, 0x52614a5U);
+
+	uint d = count_decays(my_share(nuclide[2]), threshold, state);
+
+	// one pair of global atomics per work-group instead of two per decay
+	uint sum = group_sum(d, &acc);
+	if (get_local_id(0) == 0 && sum) {
+		atomic_sub(&nuclide[0], sum);
+		atomic_add(&nuclide[1], sum);
 	}
+}
 
-	barrier(CLK_GLOBAL_MEM_FENCE);
+__kernel void radon_decay(__global uint *nuclide, const uint threshold, const uint seed) {
+	__local uint acc;
+	vuint state[4];
+	seed_state(state, seed, 0x52616eU);
 
-	if(g1 == (24 * 192) - 1){//LAST kernel run the remnant and do the swap!
-		atomic_xchg((nuclide + 2),*(nuclide + 1));
-		max = atomic_max((nuclide + 2),0) % ((24 * 192) - 1);
-		printf("k: %u - iter %u swapped %u  old %u\n",g1, max, atomic_max((nuclide + 2),0), *(nuclide + 1));
-	}
-	//all the thread will wait here that the last perform the swap and than restart
-	barrier(CLK_GLOBAL_MEM_FENCE);
+	uint d = count_decays(my_share(nuclide[3]), threshold, state);
 
-	if(g1 != (24 * 192) - 1){
-		max = atomic_max((nuclide + 2),0) / ((24 * 192) - 1);
-	}
-
-	//printf("k: %u - iter %u swapped %u  old %u\n",g1, max, atomic_max((nuclide + 2),0), *(nuclide + 1));
-	if(g1 == 1){//avoid spamming
-		//printf("k: %u - iter %u swapped %u  old %u\n",g1, max, atomic_max((nuclide + 2),0), *(nuclide + 1));
-	}
-
-	//Radon LOOP
-	for(ulong j = 0;
-	    j < max;
-	    j++) {
-		float v = rand(&state,g1);
-		if(v < prob->y){ //compare r with probability density function, here p = const.: is there a decay?
-			atom_dec(nuclide + 1);
-		}
-	}
+	uint sum = group_sum(d, &acc);
+	if (get_local_id(0) == 0 && sum)
+		atomic_sub(&nuclide[1], sum);
 }
